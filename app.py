@@ -4,6 +4,9 @@ import sys
 import click
 from flask import Flask,render_template,request,url_for,redirect,flash
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash,check_password_hash
+from flask_login import LoginManager,UserMixin,login_user
+
 
 WIN = sys.platform.startswith('win')
 if WIN: #如果是windows系统，使用三个斜线
@@ -17,6 +20,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False    #关闭对模型修改�
 app.config['SECRET_KEY'] = 'dev'
 #在扩展类实例化前加载配置
 db = SQLAlchemy(app)
+login_manager = LoginManager(app)
 
 @app.cli.command()  #注册为命令
 @click.option('--drop',is_flag=True,help='Create after drop.')  #设置选项
@@ -57,9 +61,17 @@ def forge():
 
 
 #创建数据库模型
-class User(db.Model):    #表名将会是user
+class User(db.Model,UserMixin):    #表名将会是user
     id = db.Column(db.Integer,primary_key=True)     #主键
-    name = db.Column(db.String(20))     #名字
+    name = db.Column(db.String(20))                 #名字
+    username = db.Column(db.String(20))             #用户名
+    password_hash = db.Column(db.String(128))       #密码散列值
+
+    def set_password(self,password):    #用来设置密码的方式，接收密码作为参数
+        self.password_hash = generate_password_hash(password)   #将生成的密码保持到对应字段
+
+    def validate_password(self,password):
+        return check_password_hash(self.password_hash,password)
 
 class Movie(db.Model):  #表名将会是movie
     id = db.Column(db.Integer,primary_key=True)     #主键
@@ -125,6 +137,56 @@ def delete(movie_id):
     db.session.commit()     #提交数据库会话
     flash('Item deleted.')
     return redirect(url_for('index'))   #重定向回主页
+
+@app.route('/login',methods=['GET','POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        if not username or not password:
+            flash('Invalid input.')
+            return redirect(url_for('login'))
+
+        user = User.query.first()
+        #验证用户名和密码是否一致
+        if username == user.username and user.validate_password(password):
+            login_user(user)
+            flash('Login success.')
+            return redirect(url_for('index'))
+
+        flash('Invalid username or password.')
+        return redirect(url_for('login'))
+
+    return render_template('login.html')
+
+"""生成管理员账户"""
+@app.cli.command()
+@click.option('--username',prompt=True,help='The username used to login.')
+@click.option('--password',prompt=True,hide_input=True,confirmation_prompt=True,
+              help='The password used to login.')
+def admin(username,password):
+    """Create user."""
+    db.create_all()
+
+    user = User.query.first()
+    if user is not None:
+        click.echo('Updating user...')
+        user.username = username
+        user.set_password(password)
+    else:
+        click.echo('Creating user...')
+        user = User(username=username,name='Admin')
+        user.set_password(password)
+        db.session.add(user)
+
+    db.session.commit()     #提交数据库会话
+    click.echo('Done.')
+
+@login_manager.user_loader
+def load_user(user_id):
+    user = User.query.get(int(user_id))
+    return user
 
 if __name__ == '__main__':
     app.run()
