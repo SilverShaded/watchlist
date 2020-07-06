@@ -5,7 +5,7 @@ import click
 from flask import Flask,render_template,request,url_for,redirect,flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash,check_password_hash
-from flask_login import LoginManager,UserMixin,login_user
+from flask_login import LoginManager,UserMixin,login_user,login_required,logout_user,current_user
 
 
 WIN = sys.platform.startswith('win')
@@ -21,6 +21,7 @@ app.config['SECRET_KEY'] = 'dev'
 #在扩展类实例化前加载配置
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
+login_manager.login_view = 'login'
 
 @app.cli.command()  #注册为命令
 @click.option('--drop',is_flag=True,help='Create after drop.')  #设置选项
@@ -86,6 +87,8 @@ def inject_user():  #函数名可以随意修改
 @app.route('/',methods=['GET','POST'])
 def index():
     if request.method == 'POST':
+        if not current_user.is_authenticated:   #如果当前用户未认证
+            return redirect(url_for('index'))   #重定向到主页
         #获取表单数据
         title = request.form.get('title')
         year = request.form.get('year')
@@ -111,6 +114,7 @@ def page_not_found(e):  #接收异常对象作为参数
 
 
 @app.route('/movie/edit/<int:movie_id>',methods=['GET','POST'])
+@login_required
 def edit(movie_id):
     movie = Movie.query.get_or_404(movie_id)
 
@@ -131,6 +135,7 @@ def edit(movie_id):
     return render_template('edit.html',movie=movie)
 
 @app.route('/movie/delete/<int:movie_id>',methods=['POST'])     #限定只接受POST请求
+@login_required     #登录保护
 def delete(movie_id):
     movie = Movie.query.get_or_404(movie_id)
     db.session.delete(movie)    #删除对应的记录
@@ -173,20 +178,45 @@ def admin(username,password):
     if user is not None:
         click.echo('Updating user...')
         user.username = username
-        user.set_password(password)
+        user.set_password(password) #设置密码
     else:
         click.echo('Creating user...')
         user = User(username=username,name='Admin')
-        user.set_password(password)
+        user.set_password(password) #设置密码
         db.session.add(user)
 
     db.session.commit()     #提交数据库会话
     click.echo('Done.')
 
 @login_manager.user_loader
-def load_user(user_id):
-    user = User.query.get(int(user_id))
-    return user
+def load_user(user_id):     #创建用户加载回调函数，接收用户ID作为参数
+    user = User.query.get(int(user_id))     #用ID作为User模型的主键查询对应的用户
+    return user     #返回用户对象
+
+@app.route('/logout')
+@login_required #用于视图保护
+def logout():
+    logout_user()   #登出用户
+    flash('Goodbye.')
+    return redirect(url_for('index'))   #重定向回首页
+
+
+@app.route('/settings',methods=['GET','POST'])
+@login_required
+def settings():
+    if request.method == 'POST':
+        name = request.form['name']
+
+        if not name or len(name) > 20:
+            flash('Invalid input.')
+            return redirect(url_for('settings'))
+
+        current_user.name = name
+        db.session.commit()
+        flash('Settings updated.')
+        return redirect(url_for('index'))
+
+    return render_template('settings.html')
 
 if __name__ == '__main__':
     app.run()
